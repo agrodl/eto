@@ -446,99 +446,71 @@ def main():
                     </div>
                     """, unsafe_allow_html=True)
                 
-                # ET0 Chart
-                st.markdown('<div class="section-header">📈 14-Day Evapotranspiration Chart</div>', unsafe_allow_html=True)
+                # ET0 Bar Chart
+                st.markdown('<div class="section-header">📊 14-Day Evapotranspiration Chart</div>', unsafe_allow_html=True)
                 
+                # Create a beautiful bar chart
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(
+                
+                # Add gradient colors to bars
+                colors = ['#4CAF50' if i == 0 else '#66BB6A' for i in range(len(df))]
+                
+                fig.add_trace(go.Bar(
                     x=df['Date'],
                     y=df['ET₀ (mm/day)'],
-                    mode='lines+markers',
-                    name='ET₀',
-                    line=dict(color='#4CAF50', width=3),
-                    marker=dict(size=8, color='#4CAF50'),
-                    hovertemplate='<b>Date:</b> %{x}<br><b>ET₀:</b> %{y:.2f} mm/day<extra></extra>'
+                    marker=dict(
+                        color=colors,
+                        line=dict(color='#2E7D32', width=1.5),
+                        pattern_shape="",
+                    ),
+                    hovertemplate='<b>Date:</b> %{x}<br><b>ET₀:</b> %{y:.2f} mm/day<extra></extra>',
+                    name='ET₀'
                 ))
                 
+                # Add a line showing the average
+                fig.add_hline(
+                    y=avg_et0, 
+                    line_dash="dash", 
+                    line_color="#FF9800", 
+                    line_width=3,
+                    annotation_text=f"Average: {avg_et0:.2f} mm/day",
+                    annotation_position="top right"
+                )
+                
                 fig.update_layout(
-                    title='Reference Evapotranspiration - 14 Day Forecast',
+                    title={
+                        'text': 'Reference Evapotranspiration - 14 Day Forecast',
+                        'x': 0.5,
+                        'xanchor': 'center',
+                        'font': {'size': 18, 'color': '#1976D2'}
+                    },
                     xaxis_title='Date',
                     yaxis_title='ET₀ (mm/day)',
-                    hovermode='x unified',
                     template='plotly_white',
-                    height=400,
-                    title_font_color='#1976D2',
-                    xaxis=dict(tickangle=45)
+                    height=500,
+                    showlegend=False,
+                    xaxis=dict(
+                        tickangle=45,
+                        tickfont=dict(size=11),
+                        title_font=dict(size=14, color='#1976D2')
+                    ),
+                    yaxis=dict(
+                        title_font=dict(size=14, color='#1976D2'),
+                        gridcolor='#E0E0E0',
+                        gridwidth=1
+                    ),
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    margin=dict(l=50, r=50, t=80, b=100)
+                )
+                
+                # Add some styling to make bars more attractive
+                fig.update_traces(
+                    marker_line_width=1.5,
+                    opacity=0.8
                 )
                 
                 st.plotly_chart(fig, use_container_width=True)
-                
-                # Weather parameters charts
-                st.markdown('<div class="section-header">🌡️ Weather Parameters</div>', unsafe_allow_html=True)
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    # Temperature chart
-                    fig_temp = go.Figure()
-                    fig_temp.add_trace(go.Scatter(x=df['Date'], y=df['Temp Max (°C)'], 
-                                                name='Max', line=dict(color='#D32F2F', width=2)))
-                    fig_temp.add_trace(go.Scatter(x=df['Date'], y=df['Temp Mean (°C)'], 
-                                                name='Mean', line=dict(color='#FF9800', width=2)))
-                    fig_temp.add_trace(go.Scatter(x=df['Date'], y=df['Temp Min (°C)'], 
-                                                name='Min', line=dict(color='#1976D2', width=2)))
-                    fig_temp.update_layout(
-                        title='Temperature Variation (°C)', 
-                        height=350, 
-                        template='plotly_white',
-                        title_font_color='#1976D2',
-                        xaxis=dict(tickangle=45)
-                    )
-                    st.plotly_chart(fig_temp, use_container_width=True)
-                
-                with col2:
-                    # Humidity and Wind Speed
-                    fig_hw = go.Figure()
-                    fig_hw.add_trace(go.Scatter(x=df['Date'], y=df['Humidity (%)'], 
-                                              name='Humidity (%)', line=dict(color='#2196F3', width=2),
-                                              yaxis='y'))
-                    fig_hw.add_trace(go.Scatter(x=df['Date'], y=df['Wind Speed (m/s)'], 
-                                              name='Wind Speed (m/s)', line=dict(color='#4CAF50', width=2),
-                                              yaxis='y2'))
-                    
-                    fig_hw.update_layout(
-                        title='Humidity & Wind Speed',
-                        height=350,
-                        template='plotly_white',
-                        title_font_color='#1976D2',
-                        xaxis=dict(tickangle=45),
-                        yaxis=dict(title='Humidity (%)', side='left', color='#2196F3'),
-                        yaxis2=dict(title='Wind Speed (m/s)', side='right', overlaying='y', color='#4CAF50')
-                    )
-                    st.plotly_chart(fig_hw, use_container_width=True)
-                
-                # Solar Radiation Chart
-                fig_solar = go.Figure()
-                fig_solar.add_trace(go.Scatter(
-                    x=df['Date'], 
-                    y=df['Solar Radiation (MJ/m²)'], 
-                    mode='lines+markers',
-                    name='Solar Radiation', 
-                    line=dict(color='#FF9800', width=3),
-                    marker=dict(size=6, color='#FF9800'),
-                    fill='tonexty'
-                ))
-                
-                fig_solar.update_layout(
-                    title='Solar Radiation (MJ/m²)',
-                    xaxis_title='Date',
-                    yaxis_title='Solar Radiation (MJ/m²)',
-                    height=300,
-                    template='plotly_white',
-                    title_font_color='#1976D2',
-                    xaxis=dict(tickangle=45)
-                )
-                st.plotly_chart(fig_solar, use_container_width=True)
                 
                 # Detailed table with pagination
                 st.markdown('<div class="section-header">📊 14-Day Detailed Data</div>', unsafe_allow_html=True)
