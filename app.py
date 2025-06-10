@@ -1,3 +1,13 @@
+import streamlit as st
+import requests
+import json
+import math
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
+import numpy as np
+
 # Page configuration
 st.set_page_config(
     page_title="ET₀ Penman-Monteith Calculator",
@@ -34,9 +44,8 @@ st.markdown("""
         margin: 0.5rem 0;
     }
 
-
- .metric-container p{
-	color: rgb(49 51 63) !important;
+    .metric-container p{
+        color: rgb(49 51 63) !important;
     }
     
     .weather-card {
@@ -138,32 +147,40 @@ st.markdown("""
 class PenmanMonteithCalculator:
     def __init__(self, api_key):
         self.api_key = api_key
-        self.base_url = "http://api.openweathermap.org/data/2.5"
+        self.base_url = "http://api.worldweatheronline.com/premium/v1"
         
-    def get_weather_data(self, city, lat=None, lon=None):
-        """Get current weather data and forecast"""
+    def get_weather_data(self, city):
+        """Get current weather data and forecast from World Weather Online"""
         try:
-            if lat and lon:
-                current_url = f"{self.base_url}/weather?lat={lat}&lon={lon}&appid={self.api_key}&units=metric"
-                forecast_url = f"{self.base_url}/forecast?lat={lat}&lon={lon}&appid={self.api_key}&units=metric"
-            else:
-                current_url = f"{self.base_url}/weather?q={city}&appid={self.api_key}&units=metric"
-                forecast_url = f"{self.base_url}/forecast?q={city}&appid={self.api_key}&units=metric"
+            # Current weather + 14 day forecast
+            url = f"{self.base_url}/weather.ashx"
+            params = {
+                'key': self.api_key,
+                'q': city,
+                'format': 'json',
+                'num_of_days': '14',
+                'tp': '24',  # 24 hour intervals
+                'includelocation': 'yes',
+                'showlocaltime': 'yes'
+            }
             
-            current_response = requests.get(current_url)
-            forecast_response = requests.get(forecast_url)
+            response = requests.get(url, params=params)
             
-            if current_response.status_code == 200 and forecast_response.status_code == 200:
-                return current_response.json(), forecast_response.json()
+            if response.status_code == 200:
+                data = response.json()
+                if 'data' in data and 'error' not in data['data']:
+                    return data['data']
+                else:
+                    return None
             else:
-                return None, None
+                return None
                 
         except Exception as e:
             st.error(f"API Connection Error: {e}")
-            return None, None
+            return None
     
-    def calculate_solar_radiation(self, lat, day_of_year, temp_max, temp_min, humidity):
-        """Calculate approximate solar radiation"""
+    def calculate_solar_radiation(self, lat, day_of_year, temp_max, temp_min, humidity, sunshine_hours=None):
+        """Calculate solar radiation using Hargreaves method or sunshine hours"""
         lat_rad = math.radians(lat)
         solar_declination = 0.409 * math.sin(2 * math.pi * day_of_year / 365 - 1.39)
         sunset_hour_angle = math.acos(-math.tan(lat_rad) * math.tan(solar_declination))
@@ -174,8 +191,14 @@ class PenmanMonteithCalculator:
             math.cos(lat_rad) * math.cos(solar_declination) * math.sin(sunset_hour_angle)
         )
         
-        temp_range = temp_max - temp_min
-        Rs = 0.16 * math.sqrt(temp_range) * Ra
+        # If sunshine hours available, use Angstrom-Prescott formula
+        if sunshine_hours is not None:
+            N = (24 / math.pi) * sunset_hour_angle  # Maximum possible sunshine hours
+            Rs = (0.25 + 0.50 * sunshine_hours / N) * Ra if N > 0 else 0.16 * math.sqrt(temp_max - temp_min) * Ra
+        else:
+            # Use Hargreaves method
+            temp_range = temp_max - temp_min
+            Rs = 0.16 * math.sqrt(temp_range) * Ra
         
         return Rs, Ra
     
@@ -183,19 +206,25 @@ class PenmanMonteithCalculator:
                            solar_radiation, elevation=0, lat=35):
         """Calculate ET0 using Penman-Monteith method (mm/day)"""
         
+        # Psychrometric constant
         gamma = 0.665 * (101.3 * ((293 - 0.0065 * elevation) / 293) ** 5.26)
         
+        # Saturation vapor pressure at max and min temperature
         es_max = 0.6108 * math.exp(17.27 * temp_max / (temp_max + 237.3))
         es_min = 0.6108 * math.exp(17.27 * temp_min / (temp_min + 237.3))
         es = (es_max + es_min) / 2
         
+        # Actual vapor pressure
         ea = es * humidity / 100
         
+        # Slope of saturation vapor pressure curve
         delta = 4098 * (0.6108 * math.exp(17.27 * temp_mean / (temp_mean + 237.3))) / ((temp_mean + 237.3) ** 2)
         
+        # Net radiation (assuming Rn = 0.77 * Rs and G = 0 for daily calculations)
         Rn = solar_radiation * 0.77
-        G = 0
+        G = 0  # Soil heat flux (negligible for daily calculations)
         
+        # Penman-Monteith equation
         numerator = 0.408 * delta * (Rn - G) + gamma * 900 / (temp_mean + 273) * wind_speed * (es - ea)
         denominator = delta + gamma * (1 + 0.34 * wind_speed)
         
@@ -203,100 +232,103 @@ class PenmanMonteithCalculator:
         
         return max(0, et0)
     
-    def process_weather_data(self, current_data, forecast_data):
+    def process_weather_data(self, weather_data):
         """Process weather data and calculate ET0"""
         results = []
         
-        if not current_data or not forecast_data:
+        if not weather_data or 'weather' not in weather_data:
             return results
         
-        lat = current_data['coord']['lat']
-        lon = current_data['coord']['lon']
+        # Get location information
+        if 'nearest_area' in weather_data and len(weather_data['nearest_area']) > 0:
+            location = weather_data['nearest_area'][0]
+            lat = float(location['latitude'])
+            lon = float(location['longitude'])
+        else:
+            lat = 35.0  # Default latitude
+            lon = 51.0  # Default longitude
         
-        # Process current data
-        current_temp = current_data['main']['temp']
-        current_temp_max = current_data['main']['temp_max']
-        current_temp_min = current_data['main']['temp_min']
-        current_humidity = current_data['main']['humidity']
-        current_wind = current_data['wind']['speed']
-        
-        current_date = datetime.now()
-        day_of_year = current_date.timetuple().tm_yday
-        
-        solar_rad, ra = self.calculate_solar_radiation(lat, day_of_year, 
-                                                      current_temp_max, current_temp_min, 
-                                                      current_humidity)
-        
-        et0_current = self.penman_monteith_et0(
-            current_temp, current_temp_max, current_temp_min,
-            current_humidity, current_wind, solar_rad, lat=lat
-        )
-        
-        results.append({
-            'Date': current_date.strftime('%Y-%m-%d'),
-            'Temp Mean (°C)': round(current_temp, 1),
-            'Temp Max (°C)': round(current_temp_max, 1),
-            'Temp Min (°C)': round(current_temp_min, 1),
-            'Humidity (%)': current_humidity,
-            'Wind Speed (m/s)': round(current_wind, 1),
-            'Solar Radiation (MJ/m²)': round(solar_rad, 2),
-            'ET₀ (mm/day)': round(et0_current, 2)
-        })
-        
-        # Process forecast data
-        forecast_list = forecast_data['list']
-        daily_data = {}
-        
-        for item in forecast_list:
-            date_str = datetime.fromtimestamp(item['dt']).strftime('%Y-%m-%d')
+        # Process current conditions first (today)
+        if 'current_condition' in weather_data and len(weather_data['current_condition']) > 0:
+            current = weather_data['current_condition'][0]
+            today_weather = weather_data['weather'][0] if weather_data['weather'] else None
             
-            if date_str not in daily_data:
-                daily_data[date_str] = {
-                    'temps': [],
-                    'humidity': [],
-                    'wind_speed': [],
-                    'temp_max': float('-inf'),
-                    'temp_min': float('inf')
-                }
-            
-            temp = item['main']['temp']
-            daily_data[date_str]['temps'].append(temp)
-            daily_data[date_str]['humidity'].append(item['main']['humidity'])
-            daily_data[date_str]['wind_speed'].append(item['wind']['speed'])
-            daily_data[date_str]['temp_max'] = max(daily_data[date_str]['temp_max'], 
-                                                  item['main']['temp_max'])
-            daily_data[date_str]['temp_min'] = min(daily_data[date_str]['temp_min'], 
-                                                  item['main']['temp_min'])
-        
-        # Sort dates and limit to 5 days total (including today)
-        sorted_dates = sorted([date for date in daily_data.keys() if date != current_date.strftime('%Y-%m-%d')])
-        
-        for i, date_str in enumerate(sorted_dates[:4]):  # Only take 4 more days (total 5 with today)
-            data = daily_data[date_str]
+            if today_weather:
+                current_date = datetime.now()
+                day_of_year = current_date.timetuple().tm_yday
                 
-            temp_mean = sum(data['temps']) / len(data['temps'])
-            humidity_mean = sum(data['humidity']) / len(data['humidity'])
-            wind_mean = sum(data['wind_speed']) / len(data['wind_speed'])
-            
-            forecast_date = datetime.strptime(date_str, '%Y-%m-%d')
+                # Get today's min/max from weather data
+                temp_max = float(today_weather['maxtempC'])
+                temp_min = float(today_weather['mintempC'])
+                temp_mean = (temp_max + temp_min) / 2
+                
+                # Current conditions
+                humidity = float(current['humidity'])
+                wind_speed = float(current['windspeedKmph']) * 0.277778  # Convert km/h to m/s
+                
+                # Get sunshine hours if available
+                sunshine_hours = None
+                if 'astronomy' in today_weather and len(today_weather['astronomy']) > 0:
+                    # This is approximate - WWO doesn't provide direct sunshine hours
+                    pass
+                
+                solar_rad, ra = self.calculate_solar_radiation(lat, day_of_year, temp_max, temp_min, humidity, sunshine_hours)
+                
+                et0_current = self.penman_monteith_et0(
+                    temp_mean, temp_max, temp_min,
+                    humidity, wind_speed, solar_rad, lat=lat
+                )
+                
+                results.append({
+                    'Date': current_date.strftime('%Y-%m-%d'),
+                    'Temp Mean (°C)': round(temp_mean, 1),
+                    'Temp Max (°C)': round(temp_max, 1),
+                    'Temp Min (°C)': round(temp_min, 1),
+                    'Humidity (%)': round(humidity, 1),
+                    'Wind Speed (m/s)': round(wind_speed, 1),
+                    'Solar Radiation (MJ/m²)': round(solar_rad, 2),
+                    'ET₀ (mm/day)': round(et0_current, 2)
+                })
+        
+        # Process forecast data (up to 14 days)
+        for i, day_weather in enumerate(weather_data['weather'][:14]):
+            # Skip today if we already processed current conditions
+            if i == 0 and 'current_condition' in weather_data:
+                continue
+                
+            forecast_date = datetime.strptime(day_weather['date'], '%Y-%m-%d')
             day_of_year = forecast_date.timetuple().tm_yday
             
-            solar_rad, ra = self.calculate_solar_radiation(lat, day_of_year,
-                                                          data['temp_max'], data['temp_min'],
-                                                          humidity_mean)
+            temp_max = float(day_weather['maxtempC'])
+            temp_min = float(day_weather['mintempC'])
+            temp_mean = (temp_max + temp_min) / 2
+            
+            # Average humidity from hourly data if available
+            if 'hourly' in day_weather and len(day_weather['hourly']) > 0:
+                humidity_values = [float(hour['humidity']) for hour in day_weather['hourly'] if 'humidity' in hour]
+                wind_values = [float(hour['windspeedKmph']) * 0.277778 for hour in day_weather['hourly'] if 'windspeedKmph' in hour]
+                
+                humidity = sum(humidity_values) / len(humidity_values) if humidity_values else 50
+                wind_speed = sum(wind_values) / len(wind_values) if wind_values else 2
+            else:
+                # Fallback values
+                humidity = 50  # Default humidity
+                wind_speed = 2  # Default wind speed in m/s
+            
+            solar_rad, ra = self.calculate_solar_radiation(lat, day_of_year, temp_max, temp_min, humidity)
             
             et0_forecast = self.penman_monteith_et0(
-                temp_mean, data['temp_max'], data['temp_min'],
-                humidity_mean, wind_mean, solar_rad, lat=lat
+                temp_mean, temp_max, temp_min,
+                humidity, wind_speed, solar_rad, lat=lat
             )
             
             results.append({
-                'Date': date_str,
+                'Date': day_weather['date'],
                 'Temp Mean (°C)': round(temp_mean, 1),
-                'Temp Max (°C)': round(data['temp_max'], 1),
-                'Temp Min (°C)': round(data['temp_min'], 1),
-                'Humidity (%)': round(humidity_mean, 1),
-                'Wind Speed (m/s)': round(wind_mean, 1),
+                'Temp Max (°C)': round(temp_max, 1),
+                'Temp Min (°C)': round(temp_min, 1),
+                'Humidity (%)': round(humidity, 1),
+                'Wind Speed (m/s)': round(wind_speed, 1),
                 'Solar Radiation (MJ/m²)': round(solar_rad, 2),
                 'ET₀ (mm/day)': round(et0_forecast, 2)
             })
@@ -306,11 +338,11 @@ class PenmanMonteithCalculator:
 def main():
     # Main header
     st.markdown('<h1 class="main-header">🌱 Reference Evapotranspiration Calculator</h1>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">Penman-Monteith Method • FAO-56 Standard</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">Penman-Monteith Method • FAO-56 Standard • 14-Day Forecast</p>', unsafe_allow_html=True)
     
     # City search in center
     st.markdown('<div class="city-search">', unsafe_allow_html=True)
-    city = st.text_input("🏙️ Enter City Name:", placeholder="Example: Tehran, IR", key="city_search")
+    city = st.text_input("🏙️ Enter City Name:", placeholder="Example: Tehran, Iran", key="city_search")
     st.markdown('</div>', unsafe_allow_html=True)
     
     # Sidebar
@@ -329,7 +361,8 @@ def main():
         • Irrigation scheduling<br>
         • Water resource management<br>
         • Climatology studies<br><br>
-        <strong>Unit:</strong> mm/day
+        <strong>Unit:</strong> mm/day<br>
+        <strong>Forecast:</strong> Up to 14 days
         </div>
         """, unsafe_allow_html=True)
         
@@ -337,27 +370,35 @@ def main():
         with st.expander("🔬 Technical Details"):
             st.markdown("""
             - **Method:** FAO-56 Penman-Monteith
-            - **Data Source:** OpenWeatherMap
+            - **Data Source:** World Weather Online
             - **Accuracy:** ±0.1 mm/day
-            - **Forecast:** 5 days
+            - **Forecast:** 14 days
+            - **Solar Radiation:** Hargreaves method
             """)
     
     # Main content
     if city:
-        API_KEY = "019d8b55d4f53d3a5ffc2acbec84f324"
+        API_KEY = "f38c4a29c65b4720859135600251006"
         calculator = PenmanMonteithCalculator(API_KEY)
         
         with st.spinner('🔄 Fetching weather data...'):
-            current_data, forecast_data = calculator.get_weather_data(city)
+            weather_data = calculator.get_weather_data(city)
         
-        if current_data and forecast_data:
+        if weather_data:
             api_status.success("✅ Connected")
             
             # City information
-            city_name = current_data['name']
-            country = current_data['sys']['country']
-            lat = current_data['coord']['lat']
-            lon = current_data['coord']['lon']
+            if 'nearest_area' in weather_data and len(weather_data['nearest_area']) > 0:
+                location = weather_data['nearest_area'][0]
+                city_name = location['areaName'][0]['value']
+                country = location['country'][0]['value']
+                lat = float(location['latitude'])
+                lon = float(location['longitude'])
+            else:
+                city_name = city
+                country = "Unknown"
+                lat = 0.0
+                lon = 0.0
             
             st.markdown(f"""
             <div class="success-message">
@@ -367,15 +408,17 @@ def main():
             """, unsafe_allow_html=True)
             
             # Calculate and display results
-            results = calculator.process_weather_data(current_data, forecast_data)
+            results = calculator.process_weather_data(weather_data)
             
             if results:
                 df = pd.DataFrame(results)
                 
-                # Display today's ET0 and total ET0 (removed average)
+                # Display today's ET0, 14-day total, and average
                 today_et0 = df.iloc[0]['ET₀ (mm/day)']
+                total_et0 = df['ET₀ (mm/day)'].sum()
+                avg_et0 = df['ET₀ (mm/day)'].mean()
                 
-                col1, col2 = st.columns(2)
+                col1, col2, col3 = st.columns(3)
                 with col1:
                     st.markdown(f"""
                     <div class="metric-container">
@@ -386,17 +429,25 @@ def main():
                     """, unsafe_allow_html=True)
                 
                 with col2:
-                    total_et0 = df['ET₀ (mm/day)'].sum()
                     st.markdown(f"""
                     <div class="metric-container">
-                        <div class="metric-label">Total ET₀</div>
-                        <div class="et0-value">{total_et0:.2f}</div>
-                        <p style="margin: 0; color: rgba(255,255,255,0.8);">mm (5 days)</p>
+                        <div class="metric-label">14-Day Total ET₀</div>
+                        <div class="et0-value">{total_et0:.1f}</div>
+                        <p style="margin: 0; color: rgba(255,255,255,0.8);">mm</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col3:
+                    st.markdown(f"""
+                    <div class="metric-container">
+                        <div class="metric-label">Average ET₀</div>
+                        <div class="et0-value">{avg_et0:.2f}</div>
+                        <p style="margin: 0; color: rgba(255,255,255,0.8);">mm/day</p>
                     </div>
                     """, unsafe_allow_html=True)
                 
                 # ET0 Chart
-                st.markdown('<div class="section-header">📈 Evapotranspiration Chart</div>', unsafe_allow_html=True)
+                st.markdown('<div class="section-header">📈 14-Day Evapotranspiration Chart</div>', unsafe_allow_html=True)
                 
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(
@@ -405,74 +456,107 @@ def main():
                     mode='lines+markers',
                     name='ET₀',
                     line=dict(color='#4CAF50', width=3),
-                    marker=dict(size=10, color='#4CAF50')
+                    marker=dict(size=8, color='#4CAF50'),
+                    hovertemplate='<b>Date:</b> %{x}<br><b>ET₀:</b> %{y:.2f} mm/day<extra></extra>'
                 ))
                 
                 fig.update_layout(
-                    title='Reference Evapotranspiration Variation',
+                    title='Reference Evapotranspiration - 14 Day Forecast',
                     xaxis_title='Date',
                     yaxis_title='ET₀ (mm/day)',
                     hovermode='x unified',
                     template='plotly_white',
                     height=400,
-                    title_font_color='#1976D2'
+                    title_font_color='#1976D2',
+                    xaxis=dict(tickangle=45)
                 )
                 
                 st.plotly_chart(fig, use_container_width=True)
                 
-                # Weather parameters charts - separate charts for humidity and wind
+                # Weather parameters charts
                 st.markdown('<div class="section-header">🌡️ Weather Parameters</div>', unsafe_allow_html=True)
                 
-                col1, col2, col3 = st.columns(3)
+                col1, col2 = st.columns(2)
                 
                 with col1:
                     # Temperature chart
                     fig_temp = go.Figure()
                     fig_temp.add_trace(go.Scatter(x=df['Date'], y=df['Temp Max (°C)'], 
-                                                name='Max', line=dict(color='#D32F2F')))
+                                                name='Max', line=dict(color='#D32F2F', width=2)))
                     fig_temp.add_trace(go.Scatter(x=df['Date'], y=df['Temp Mean (°C)'], 
-                                                name='Mean', line=dict(color='#FF9800')))
+                                                name='Mean', line=dict(color='#FF9800', width=2)))
                     fig_temp.add_trace(go.Scatter(x=df['Date'], y=df['Temp Min (°C)'], 
-                                                name='Min', line=dict(color='#1976D2')))
-                    fig_temp.update_layout(title='Temperature (°C)', height=300, template='plotly_white',
-                                         title_font_color='#1976D2')
+                                                name='Min', line=dict(color='#1976D2', width=2)))
+                    fig_temp.update_layout(
+                        title='Temperature Variation (°C)', 
+                        height=350, 
+                        template='plotly_white',
+                        title_font_color='#1976D2',
+                        xaxis=dict(tickangle=45)
+                    )
                     st.plotly_chart(fig_temp, use_container_width=True)
                 
                 with col2:
-                    # Humidity chart
-                    fig_humid = go.Figure()
-                    fig_humid.add_trace(go.Scatter(x=df['Date'], y=df['Humidity (%)'], 
-                                                 name='Humidity (%)', line=dict(color='#2196F3')))
-                    fig_humid.update_layout(
-                        title='Humidity (%)',
-                        yaxis=dict(title='Humidity (%)'),
-                        height=300,
+                    # Humidity and Wind Speed
+                    fig_hw = go.Figure()
+                    fig_hw.add_trace(go.Scatter(x=df['Date'], y=df['Humidity (%)'], 
+                                              name='Humidity (%)', line=dict(color='#2196F3', width=2),
+                                              yaxis='y'))
+                    fig_hw.add_trace(go.Scatter(x=df['Date'], y=df['Wind Speed (m/s)'], 
+                                              name='Wind Speed (m/s)', line=dict(color='#4CAF50', width=2),
+                                              yaxis='y2'))
+                    
+                    fig_hw.update_layout(
+                        title='Humidity & Wind Speed',
+                        height=350,
                         template='plotly_white',
-                        title_font_color='#1976D2'
+                        title_font_color='#1976D2',
+                        xaxis=dict(tickangle=45),
+                        yaxis=dict(title='Humidity (%)', side='left', color='#2196F3'),
+                        yaxis2=dict(title='Wind Speed (m/s)', side='right', overlaying='y', color='#4CAF50')
                     )
-                    st.plotly_chart(fig_humid, use_container_width=True)
+                    st.plotly_chart(fig_hw, use_container_width=True)
                 
-                with col3:
-                    # Wind speed chart
-                    fig_wind = go.Figure()
-                    fig_wind.add_trace(go.Scatter(x=df['Date'], y=df['Wind Speed (m/s)'], 
-                                                name='Wind Speed', line=dict(color='#4CAF50')))
-                    fig_wind.update_layout(
-                        title='Wind Speed (m/s)',
-                        yaxis=dict(title='Wind Speed (m/s)'),
-                        height=300,
-                        template='plotly_white',
-                        title_font_color='#1976D2'
-                    )
-                    st.plotly_chart(fig_wind, use_container_width=True)
+                # Solar Radiation Chart
+                fig_solar = go.Figure()
+                fig_solar.add_trace(go.Scatter(
+                    x=df['Date'], 
+                    y=df['Solar Radiation (MJ/m²)'], 
+                    mode='lines+markers',
+                    name='Solar Radiation', 
+                    line=dict(color='#FF9800', width=3),
+                    marker=dict(size=6, color='#FF9800'),
+                    fill='tonexty'
+                ))
                 
-                # Detailed table (5 days only)
-                st.markdown('<div class="section-header">📊 5-Day Detailed Data</div>', unsafe_allow_html=True)
+                fig_solar.update_layout(
+                    title='Solar Radiation (MJ/m²)',
+                    xaxis_title='Date',
+                    yaxis_title='Solar Radiation (MJ/m²)',
+                    height=300,
+                    template='plotly_white',
+                    title_font_color='#1976D2',
+                    xaxis=dict(tickangle=45)
+                )
+                st.plotly_chart(fig_solar, use_container_width=True)
+                
+                # Detailed table with pagination
+                st.markdown('<div class="section-header">📊 14-Day Detailed Data</div>', unsafe_allow_html=True)
+                
+                # Show first 7 days and last 7 days separately or all together
+                display_option = st.radio("Display Option:", ["All 14 Days", "First 7 Days", "Last 7 Days"], horizontal=True)
+                
+                if display_option == "First 7 Days":
+                    display_df = df.head(7)
+                elif display_option == "Last 7 Days":
+                    display_df = df.tail(7)
+                else:
+                    display_df = df
                 
                 st.dataframe(
-                    df,
+                    display_df,
                     use_container_width=True,
-                    height=250,
+                    height=400,
                     column_config={
                         "ET₀ (mm/day)": st.column_config.ProgressColumn(
                             "ET₀ (mm/day)",
@@ -485,7 +569,7 @@ def main():
                             "Humidity (%)",
                             min_value=0,
                             max_value=100,
-                            format="%d%%"
+                            format="%.1f%%"
                         )
                     }
                 )
@@ -500,7 +584,7 @@ def main():
                     st.download_button(
                         label="📥 Download CSV",
                         data=csv,
-                        file_name=f"ET0_{city_name}_{datetime.now().strftime('%Y%m%d')}.csv",
+                        file_name=f"ET0_{city_name}_{datetime.now().strftime('%Y%m%d')}_14days.csv",
                         mime="text/csv"
                     )
                 
@@ -509,7 +593,7 @@ def main():
                     st.download_button(
                         label="📥 Download JSON",
                         data=json_data,
-                        file_name=f"ET0_{city_name}_{datetime.now().strftime('%Y%m%d')}.json",
+                        file_name=f"ET0_{city_name}_{datetime.now().strftime('%Y%m%d')}_14days.json",
                         mime="application/json"
                     )
             
@@ -518,11 +602,10 @@ def main():
             st.markdown("""
             <div class="error-message">
                 <h3>⚠️ Data Retrieval Error</h3>
-                <p>Please check the city name or try again</p>
+                <p>Please check the city name or try again. Make sure to enter city name in English.</p>
+                <p>Example formats: "Tehran", "Tehran, Iran", "London, UK"</p>
             </div>
             """, unsafe_allow_html=True)
-    
-
     
     # Brand footer with link
     st.markdown("""
@@ -538,7 +621,8 @@ def main():
     st.markdown("""
     <div style="text-align: center; color: #666; padding: 1rem;">
         <p>🔬 Calculations based on FAO-56 Penman-Monteith standard method</p>
-        <p>📡 Weather data from OpenWeatherMap API</p>
+        <p>📡 Weather data from World Weather Online API</p>
+        <p>🌍 14-day forecast with enhanced accuracy</p>
     </div>
     """, unsafe_allow_html=True)
 
