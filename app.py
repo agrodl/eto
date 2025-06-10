@@ -140,41 +140,6 @@ st.markdown("""
     .city-search {
         text-align: center;
         margin: 2rem 0;
-        padding: 2rem;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        border-radius: 20px;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-    }
-    
-    .city-search .stTextInput > div > div > input {
-        background: rgba(255, 255, 255, 0.9) !important;
-        border: 2px solid rgba(255, 255, 255, 0.3) !important;
-        border-radius: 15px !important;
-        padding: 1rem 1.5rem !important;
-        font-size: 1.1rem !important;
-        text-align: center !important;
-        color: #2c3e50 !important;
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1) !important;
-        transition: all 0.3s ease !important;
-    }
-    
-    .city-search .stTextInput > div > div > input:focus {
-        border-color: #4CAF50 !important;
-        box-shadow: 0 0 20px rgba(76, 175, 80, 0.3) !important;
-        transform: translateY(-2px) !important;
-    }
-    
-    .city-search .stTextInput > div > div > input::placeholder {
-        color: rgba(44, 62, 80, 0.7) !important;
-        font-style: italic !important;
-    }
-    
-    .city-search-label {
-        color: white;
-        font-size: 1.3rem;
-        font-weight: 600;
-        margin-bottom: 1rem;
-        text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -377,8 +342,7 @@ def main():
     
     # City search in center
     st.markdown('<div class="city-search">', unsafe_allow_html=True)
-    st.markdown('<div class="city-search-label">🏙️ Enter City Name</div>', unsafe_allow_html=True)
-    city = st.text_input("", placeholder="Example: Tehran, Iran", key="city_search", label_visibility="collapsed")
+    city = st.text_input("🏙️ Enter City Name:", placeholder="Example: Tehran, Iran", key="city_search")
     st.markdown('</div>', unsafe_allow_html=True)
     
     # Sidebar
@@ -481,6 +445,100 @@ def main():
                         <p style="margin: 0; color: rgba(255,255,255,0.8);">mm/day</p>
                     </div>
                     """, unsafe_allow_html=True)
+                
+                # ET0 Chart
+                st.markdown('<div class="section-header">📈 14-Day Evapotranspiration Chart</div>', unsafe_allow_html=True)
+                
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=df['Date'],
+                    y=df['ET₀ (mm/day)'],
+                    mode='lines+markers',
+                    name='ET₀',
+                    line=dict(color='#4CAF50', width=3),
+                    marker=dict(size=8, color='#4CAF50'),
+                    hovertemplate='<b>Date:</b> %{x}<br><b>ET₀:</b> %{y:.2f} mm/day<extra></extra>'
+                ))
+                
+                fig.update_layout(
+                    title='Reference Evapotranspiration - 14 Day Forecast',
+                    xaxis_title='Date',
+                    yaxis_title='ET₀ (mm/day)',
+                    hovermode='x unified',
+                    template='plotly_white',
+                    height=400,
+                    title_font_color='#1976D2',
+                    xaxis=dict(tickangle=45)
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Weather parameters charts
+                st.markdown('<div class="section-header">🌡️ Weather Parameters</div>', unsafe_allow_html=True)
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Temperature chart
+                    fig_temp = go.Figure()
+                    fig_temp.add_trace(go.Scatter(x=df['Date'], y=df['Temp Max (°C)'], 
+                                                name='Max', line=dict(color='#D32F2F', width=2)))
+                    fig_temp.add_trace(go.Scatter(x=df['Date'], y=df['Temp Mean (°C)'], 
+                                                name='Mean', line=dict(color='#FF9800', width=2)))
+                    fig_temp.add_trace(go.Scatter(x=df['Date'], y=df['Temp Min (°C)'], 
+                                                name='Min', line=dict(color='#1976D2', width=2)))
+                    fig_temp.update_layout(
+                        title='Temperature Variation (°C)', 
+                        height=350, 
+                        template='plotly_white',
+                        title_font_color='#1976D2',
+                        xaxis=dict(tickangle=45)
+                    )
+                    st.plotly_chart(fig_temp, use_container_width=True)
+                
+                with col2:
+                    # Humidity and Wind Speed
+                    fig_hw = go.Figure()
+                    fig_hw.add_trace(go.Scatter(x=df['Date'], y=df['Humidity (%)'], 
+                                              name='Humidity (%)', line=dict(color='#2196F3', width=2),
+                                              yaxis='y'))
+                    fig_hw.add_trace(go.Scatter(x=df['Date'], y=df['Wind Speed (m/s)'], 
+                                              name='Wind Speed (m/s)', line=dict(color='#4CAF50', width=2),
+                                              yaxis='y2'))
+                    
+                    fig_hw.update_layout(
+                        title='Humidity & Wind Speed',
+                        height=350,
+                        template='plotly_white',
+                        title_font_color='#1976D2',
+                        xaxis=dict(tickangle=45),
+                        yaxis=dict(title='Humidity (%)', side='left', color='#2196F3'),
+                        yaxis2=dict(title='Wind Speed (m/s)', side='right', overlaying='y', color='#4CAF50')
+                    )
+                    st.plotly_chart(fig_hw, use_container_width=True)
+                
+                # Solar Radiation Chart
+                fig_solar = go.Figure()
+                fig_solar.add_trace(go.Scatter(
+                    x=df['Date'], 
+                    y=df['Solar Radiation (MJ/m²)'], 
+                    mode='lines+markers',
+                    name='Solar Radiation', 
+                    line=dict(color='#FF9800', width=3),
+                    marker=dict(size=6, color='#FF9800'),
+                    fill='tonexty'
+                ))
+                
+                fig_solar.update_layout(
+                    title='Solar Radiation (MJ/m²)',
+                    xaxis_title='Date',
+                    yaxis_title='Solar Radiation (MJ/m²)',
+                    height=300,
+                    template='plotly_white',
+                    title_font_color='#1976D2',
+                    xaxis=dict(tickangle=45)
+                )
+                st.plotly_chart(fig_solar, use_container_width=True)
                 
                 # Detailed table with pagination
                 st.markdown('<div class="section-header">📊 14-Day Detailed Data</div>', unsafe_allow_html=True)
